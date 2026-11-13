@@ -5,8 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GROQ_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # Current stable Flash model suitable for new Gemini API projects.
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    # Current Groq replacement for llama-3.3-70b-versatile on developer tiers.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     ALLOWED_ORIGINS: str = "*"
 
     model_config = SettingsConfigDict(
