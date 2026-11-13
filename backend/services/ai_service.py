@@ -1,117 +1,100 @@
-import google.generativeai as genai
+import logging
+import httpx
+from google import genai
+from google.genai import types
+
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class HausaAIService:
-    """
-    Wraps Gemini API with Hausa language context.
-    Handles bilingual communication (Hausa + English).
-    """
-    
+    """Gemini-first Hausa/English assistant with Groq fallback."""
+
     def __init__(self):
-        """Initialize Gemini client with API key."""
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(settings.MODEL_NAME)
-    
+        self.gemini_client = (
+            genai.Client(api_key=settings.GEMINI_API_KEY)
+            if settings.GEMINI_API_KEY else None
+        )
+
     @staticmethod
     def _get_system_prompt() -> str:
-        """
-        Returns the system prompt for HausaAI.
-        Defines personality, tone, and language behavior.
-        """
-        return """You are HausaAI, an intelligent assistant for Hausa language processing and African tech context.
+        return """You are HausaAI Pro, an intelligent and culturally aware assistant.
+Reply in the language the user uses: Hausa for Hausa, English for English,
+and natural code-switching when the user mixes both. Be accurate, respectful,
+clear, practical, and concise when appropriate. Do not invent facts. If a
+request is unclear, ask a focused clarification question. Help with learning,
+translation, programming, technology, business, and everyday questions."""
 
-CORE TRAITS:
-- Intelligent, practical, and culturally aware
-- Respectful of Hausa communication style
-- Warm and professional, never robotic or overly corporate
-- Clear explanations that simplify complex ideas
-- Avoids cringe motivational language or fake "Africanized" tone
+    def _ask_gemini(self, message: str) -> str:
+        response = self.gemini_client.models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents=message,
+            config=types.GenerateContentConfig(
+                system_instruction=self._get_system_prompt(),
+                temperature=0.7,
+            ),
+        )
+        answer = getattr(response, "text", None)
+        if not answer:
+            raise RuntimeError("Gemini returned an empty response.")
+        return answer.strip()
 
-LANGUAGE BEHAVIOR:
-- If user speaks Hausa → respond in Hausa
-- If user speaks English → respond in English  
-- If user mixes languages → respond naturally in mixed language (code-switching is normal)
-- Understand Hausa greetings: Sannu, Sannu da aiki, Ya kake?, etc.
-- Understand Nigerian/Hausa context: education, business, tech, local expressions
-- If user says something unclear, ask for clarification respectfully
+    def _ask_groq(self, message: str) -> str:
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+            json={
+                "model": settings.GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": self._get_system_prompt()},
+                    {"role": "user", "content": message},
+                ],
+                "temperature": 0.7,
+            },
+            timeout=45.0,
+        )
+        response.raise_for_status()
+        answer = response.json()["choices"][0]["message"]["content"]
+        if not answer:
+            raise RuntimeError("Groq returned an empty response.")
+        return answer.strip()
 
-EXAMPLE BEHAVIORS:
-- "Sannu, ina kowa?" → Respond naturally in Hausa
-- "How do I deploy my backend?" → Respond in English
-- "Ban gane ba, shin yan..." → Understand and simplify
-- "Wallahi wannan ya rikitar dani" → Understand frustration contextually
-
-AREAS OF EXPERTISE:
-- Hausa language learning and translation
-- Programming and tech concepts
-- Conversational AI and chatbots
-- African tech ecosystem
-- Education and communication
-
-TONE: Never fake. Never over-force culture. Natural > performative."""
-    
     def chat(self, message: str) -> dict:
-        """
-        Send user message to Gemini and get response.
-        
-        Args:
-            message: User input in Hausa or English
-            
-        Returns:
-            dict with 'response' and 'language' keys
-        """
-        try:
-            system_prompt = self._get_system_prompt()
-            
-            # Send message to Gemini with system context
-            full_message = f"{system_prompt}\n\nUser: {message}"
-            response = self.model.generate_content(full_message)
-            
-            # Extract response text
-            ai_response = response.text if response else "I couldn't process that. Try again?"
-            
-            # Detect language (simple heuristic)
-            language = self._detect_language(message)
-            
-            return {
-                "response": ai_response,
-                "language": language
-            }
-        
-        except Exception as e:
-            return {
-                "response": f"Error processing your message: {str(e)}",
-                "language": "error"
-            }
-    
+        if not self.gemini_client and not settings.GROQ_API_KEY:
+            raise RuntimeError("Add GEMINI_API_KEY or GROQ_API_KEY to the server environment.")
+
+        if self.gemini_client:
+            try:
+                answer = self._ask_gemini(message)
+                return {"response": answer, "language": self._detect_language(message)}
+            except Exception:
+                logger.exception("Gemini request failed; attempting Groq fallback.")
+
+        if settings.GROQ_API_KEY:
+            try:
+                answer = self._ask_groq(message)
+                return {"response": answer, "language": self._detect_language(message)}
+            except Exception:
+                logger.exception("Groq request failed.")
+
+        raise RuntimeError("All configured AI providers are temporarily unavailable.")
+
     @staticmethod
     def _detect_language(text: str) -> str:
-        """
-        Simple language detection for Hausa/English/Mixed.
-        
-        Args:
-            text: User input
-            
-        Returns:
-            'hausa', 'english', or 'mixed'
-        """
-        # Common Hausa words
         hausa_words = {
-            "sannu", "ya", "kake", "kowa", "ina", "da", "ne", "ce", "yau",
-            "gida", "gobe", "jiya", "wannan", "wadannan", "ko", "amma",
-            "wallahi", "kai", "ni", "mu", "su", "zan", "za", "na", "a"
+            "sannu", "yaya", "kake", "kike", "ina", "ne", "ce", "yau",
+            "gida", "gobe", "jiya", "wannan", "wadannan", "amma", "wallahi",
+            "kai", "ni", "mu", "su", "zan", "ban", "gane", "lafiya",
+            "nagode", "menene", "saboda", "kana", "kuna", "nake"
         }
-        
-        # Convert to lowercase and split
-        words = text.lower().split()
-        
-        hausa_count = sum(1 for word in words if word in hausa_words)
-        hausa_ratio = hausa_count / len(words) if words else 0
-        
-        if hausa_ratio > 0.5:
-            return "hausa"
-        elif hausa_ratio > 0.1:
-            return "mixed"
-        else:
+        words = [w.strip(".,!?;:()[]{}\"'").lower() for w in text.split()]
+        words = [w for w in words if w]
+        if not words:
             return "english"
+        ratio = sum(w in hausa_words for w in words) / len(words)
+        if ratio >= 0.30:
+            return "hausa"
+        if ratio >= 0.10:
+            return "mixed"
+        return "english"
