@@ -58,16 +58,16 @@ async def chat_rate_limit(request: Request, call_next):
             for host in stale_clients:
                 _request_times.pop(host, None)
 
-        timestamps = _request_times[client_host]
-        cutoff = now - window
-        while timestamps and timestamps[0] <= cutoff:
-            timestamps.popleft()
-
-        if len(_request_times) > _MAX_TRACKED_CLIENTS:
+        if client_host not in _request_times and len(_request_times) >= _MAX_TRACKED_CLIENTS:
             return JSONResponse(
                 status_code=503,
                 content={"detail": "The service is temporarily busy. Please try again."},
             )
+
+        timestamps = _request_times.setdefault(client_host, deque())
+        cutoff = now - window
+        while timestamps and timestamps[0] <= cutoff:
+            timestamps.popleft()
 
         if len(timestamps) >= limit:
             retry_after = max(1, math.ceil(window - (now - timestamps[0])))
