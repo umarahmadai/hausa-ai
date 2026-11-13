@@ -16,4 +16,8 @@ services:
       - key: GROQ_MODEL
         value: openai/gpt-oss-120b
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
+      - key: API_RATE_LIMIT_REQUESTS
+        value: "30"
+      - key: API_RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
